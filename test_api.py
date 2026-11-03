@@ -46,11 +46,15 @@ async def run_tests():
         print(f"  [OK] GET /api/cameras : {len(cameras)} kamera berhasil dimuat")
 
         # 6. Add new camera
-        new_cam = await client.post("/api/cameras", json={
-            "name": "Kamera Belakang",
-            "location": "Halaman Belakang",
-            "url": "http://192.168.1.100:8080/video"
-        })
+        new_cam = await client.post(
+            "/api/cameras",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": "Kamera Belakang",
+                "location": "Halaman Belakang",
+                "url": "http://192.168.1.100:8080/video"
+            }
+        )
         assert new_cam.status_code == 201, f"Add camera error: {new_cam.text}"
         print("  [OK] POST /api/cameras : Kamera baru berhasil ditambahkan")
 

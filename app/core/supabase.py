@@ -172,14 +172,19 @@ class SupabaseService:
     # ==========================
     # CAMERA OPERATIONS
     # ==========================
-    async def get_cameras(self) -> List[Dict[str, Any]]:
+    async def get_cameras(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if self.is_connected:
             try:
-                res = self.client.table("cameras").select("*").order("created_at", desc=False).execute()
-                return res.data
+                query = self.client.table("cameras").select("*")
+                if user_id:
+                    query = query.eq("user_id", user_id)
+                res = query.order("created_at", desc=False).execute()
+                return res.data or []
             except Exception as e:
                 logger.error(f"[Supabase] Error get_cameras: {e}")
 
+        if user_id:
+            return [c for c in self._mock_cameras if c.get("user_id") == user_id]
         return self._mock_cameras
 
     async def create_camera(self, camera_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,16 +202,22 @@ class SupabaseService:
         self._mock_cameras.append(camera_data)
         return camera_data
 
-    async def delete_camera(self, camera_id: str) -> bool:
+    async def delete_camera(self, camera_id: str, user_id: Optional[str] = None) -> bool:
         if self.is_connected:
             try:
-                self.client.table("cameras").delete().eq("id", camera_id).execute()
+                query = self.client.table("cameras").delete().eq("id", camera_id)
+                if user_id:
+                    query = query.eq("user_id", user_id)
+                query.execute()
                 return True
             except Exception as e:
                 logger.error(f"[Supabase] Error delete_camera: {e}")
 
         initial_len = len(self._mock_cameras)
-        self._mock_cameras = [c for c in self._mock_cameras if c["id"] != camera_id]
+        self._mock_cameras = [
+            c for c in self._mock_cameras
+            if not (c["id"] == camera_id and (not user_id or c.get("user_id") == user_id))
+        ]
         return len(self._mock_cameras) < initial_len
 
     # ==========================

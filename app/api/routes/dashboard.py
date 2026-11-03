@@ -1,12 +1,15 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from typing import Optional, Dict, Any
 from app.schemas.dashboard import DashboardStats, WeeklyActivityItem
 from app.core.supabase import db
+from app.api.deps import get_optional_current_user
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 @router.get("/summary", response_model=DashboardStats)
-async def get_dashboard_summary():
-    cameras = await db.get_cameras()
+async def get_dashboard_summary(current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)):
+    user_id = current_user["id"] if current_user else None
+    cameras = await db.get_cameras(user_id=user_id)
     incidents = await db.get_incidents()
 
     active_count = len([c for c in cameras if c.get("status") == "online"])

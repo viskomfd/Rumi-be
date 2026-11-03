@@ -6,6 +6,21 @@ from app.core.supabase import db
 
 security = HTTPBearer(auto_error=False)
 
+async def get_optional_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
+    if not credentials or not credentials.credentials:
+        return None
+
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        return None
+
+    email: str = payload.get("sub")
+    if email is None:
+        return None
+
+    return await db.get_user_by_email(email)
+
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
