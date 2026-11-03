@@ -26,16 +26,16 @@ logger = logging.getLogger("rumi.model")
 # KONFIGURASI THRESHOLD
 # =========================
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "yolov8n-pose.pt")
-CONF_THRESHOLD = 0.5                 # minimum confidence deteksi orang
+CONF_THRESHOLD = 0.35                # confidence deteksi orang (diturunkan agar posisi rebah di lantai tetap terdeteksi)
 
-# Threshold hasil kalibrasi dari eksperimen video CAUCAFall
+# Threshold hasil kalibrasi dari eksperimen deteksi jatuh
 ASPECT_RATIO_THRESHOLD = 0.55        # width/height bbox > ini -> indikasi rebah
-TORSO_ANGLE_THRESHOLD = 40           # derajat dari vertikal -> indikasi rebah
-VERTICAL_VELOCITY_THRESHOLD = 25     # px/frame turun cepat -> indikasi jatuh (fitur paling reliable)
-INACTIVITY_SECONDS = 3               # diam di posisi rebah > ini -> fall confirmed
+TORSO_ANGLE_THRESHOLD = 40.0         # derajat dari vertikal -> indikasi rebah
+VERTICAL_VELOCITY_THRESHOLD = 20.0   # px/frame turun cepat -> indikasi jatuh
+INACTIVITY_SECONDS = 1.5             # diam di posisi rebah >= 1.5 detik -> fall confirmed (responsif untuk tes)
 
-POSTURE_WINDOW = 7                   # jumlah frame terakhir yang dicek untuk voting
-POSTURE_VOTE_RATIO = 0.6             # minimal proporsi frame TRUE dalam window agar dianggap stabil
+POSTURE_WINDOW = 5                   # jumlah frame terakhir yang dicek untuk voting
+POSTURE_VOTE_RATIO = 0.5             # minimal proporsi frame TRUE dalam window agar dianggap stabil
 
 ALERT_API_URL = "http://127.0.0.1:8000/api/incidents"
 
@@ -70,18 +70,17 @@ class PersonTracker:
 
     def __init__(self, history_len: int = 10):
         self.hip_y_history = deque(maxlen=history_len)
-        self.posture_flags = deque(maxlen=POSTURE_WINDOW)  # history True/False tiap frame
+        self.posture_flags = deque(maxlen=POSTURE_WINDOW)
         self.fall_suspected_since: Optional[float] = None
+        self.fall_start_pos: Optional[Tuple[float, float]] = None
         self.last_hip_pos: Optional[Tuple[float, float]] = None
         self.alert_sent: bool = False
 
     def update_posture_flag(self, is_fall_posture: bool) -> bool:
-        """Catat hasil deteksi per-frame, lalu putuskan status STABIL berdasarkan
-        voting mayoritas beberapa frame terakhir -> tahan terhadap noise/flicker
-        keypoint saat orang sedang tergeletak."""
+        """Catat hasil deteksi per-frame, lalu putuskan status STABIL berdasarkan voting."""
         self.posture_flags.append(is_fall_posture)
-        if len(self.posture_flags) < self.posture_flags.maxlen:
-            return False  # belum cukup data, anggap belum stabil
+        if len(self.posture_flags) < min(3, self.posture_flags.maxlen):
+            return is_fall_posture
         true_ratio = sum(self.posture_flags) / len(self.posture_flags)
         return true_ratio >= POSTURE_VOTE_RATIO
 
@@ -94,20 +93,28 @@ class PersonTracker:
             return 0.0
         return float(self.hip_y_history[-1] - self.hip_y_history[0])
 
-    def is_inactive(self, current_hip: Tuple[float, float], movement_threshold: float = 15.0) -> bool:
-        if self.last_hip_pos is None:
-            return False
-        dist = math.dist(current_hip, self.last_hip_pos)
+    def is_inactive(self, current_hip: Tuple[float, float], movement_threshold: float = 40.0) -> bool:
+        if self.fall_start_pos is None:
+            self.fall_start_pos = current_hip
+            return True
+        dist = math.dist(current_hip, self.fall_start_pos)
         return dist < movement_threshold
 
 
-def send_alert(frame: np.ndarray, track_id: int, confidence: float, camera_name: str = "Ruang Tamu · Cam 01", location: str = "Ruang Tamu") -> Optional[Dict[str, Any]]:
+def send_alert(
+    frame: np.ndarray,
+    track_id: int,
+    confidence: float,
+    camera_name: str = "Ruang Tamu · Cam 01",
+    location: str = "Ruang Tamu",
+    camera_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """Simpan snapshot dan kirim data insiden ke backend FastAPI."""
     import requests
 
     timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
     snapshot_filename = f"fall_{track_id}_{int(time.time())}.jpg"
-    
+
     # Simpan snapshot ke folder static backend
     backend_static = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "uploads"))
     os.makedirs(backend_static, exist_ok=True)
@@ -115,6 +122,7 @@ def send_alert(frame: np.ndarray, track_id: int, confidence: float, camera_name:
     cv2.imwrite(snapshot_path, frame)
 
     payload = {
+        "camera_id": camera_id,
         "camera_name": camera_name,
         "location": location,
         "person_name": "Pak Hartono",
@@ -172,7 +180,8 @@ class FallDetector:
         frame: np.ndarray,
         on_fall_callback=None,
         camera_name: str = "Ruang Tamu · Cam 01",
-        location: str = "Ruang Tamu"
+        location: str = "Ruang Tamu",
+        camera_id: Optional[str] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         Memproses satu frame OpenCV numpy array untuk deteksi jatuh.
@@ -194,7 +203,6 @@ class FallDetector:
         }
 
         if not self.is_loaded or self.model is None:
-            # Mode fallback / simulasi jika model tidak ada
             telemetry["latency_ms"] = round((time.time() - start_time) * 1000, 2)
             telemetry["source"] = "mock_adapter"
             return frame, telemetry
@@ -216,6 +224,13 @@ class FallDetector:
             keypoints = results[0].keypoints.xy.cpu().numpy()
             confidences = results[0].boxes.conf.cpu().numpy() if results[0].boxes.conf is not None else [0.9] * len(boxes)
 
+            # Single-person tracker persistence:
+            # Jika hanya ada 1 orang di frame dan track_id berganti saat jatuh, wariskan status tracker
+            if len(boxes) == 1 and track_ids[0] not in self.trackers and len(self.trackers) > 0:
+                old_tracker = list(self.trackers.values())[-1]
+                if old_tracker.fall_suspected_since is not None and not old_tracker.alert_sent:
+                    self.trackers[track_ids[0]] = old_tracker
+
             for box, track_id, kpts, conf in zip(boxes, track_ids, keypoints, confidences):
                 if track_id not in self.trackers:
                     self.trackers[track_id] = PersonTracker()
@@ -230,14 +245,16 @@ class FallDetector:
                 tracker.update_hip(hip_mid)
                 v_velocity = tracker.vertical_velocity()
 
-                # --- Heuristic & Motion Analysis (per-frame) ---
-                raw_posture_flag = (
-                    aspect_ratio > ASPECT_RATIO_THRESHOLD
-                    or torso_angle > TORSO_ANGLE_THRESHOLD
-                    or v_velocity > VERTICAL_VELOCITY_THRESHOLD
-                )
-                
-                # Voting mayoritas beberapa frame terakhir
+                # Heuristic & Motion Analysis:
+                # Seseorang HANYA terindikasi jatuh jika torso miring mendekati mendatar (> 45 derajat)
+                # DAN (bounding box melebar mendatar > 0.85 ATAU bergerak turun dengan cepat).
+                # Ini mencegah false-positive saat berdiri tegak di depan kamera.
+                is_torso_inclined = torso_angle > 45.0
+                is_box_horizontal = aspect_ratio > 0.85
+                is_dropping_fast = v_velocity > 20.0
+
+                raw_posture_flag = is_torso_inclined and (is_box_horizontal or is_dropping_fast)
+
                 posture_indicates_fall = tracker.update_posture_flag(raw_posture_flag)
 
                 status_text = "Normal"
@@ -247,26 +264,26 @@ class FallDetector:
                     status_text = "Suspected Fall"
                     if tracker.fall_suspected_since is None:
                         tracker.fall_suspected_since = time.time()
+                        tracker.fall_start_pos = hip_mid
 
                     duration = time.time() - tracker.fall_suspected_since
                     inactive = tracker.is_inactive(hip_mid)
 
-                    # --- Fall Confirmation & Thresholding ---
                     if duration >= INACTIVITY_SECONDS and inactive and not tracker.alert_sent:
                         status_text = "FALL DETECTED"
                         fall_confirmed = True
                         tracker.alert_sent = True
 
-                        # Kirim alert otomatis jika callback tersedia atau via send_alert
                         if on_fall_callback:
                             try:
                                 on_fall_callback(frame, track_id, float(conf))
                             except Exception as e:
                                 logger.error(f"Error in on_fall_callback: {e}")
                         else:
-                            send_alert(frame, track_id, float(conf), camera_name, location)
+                            send_alert(frame, track_id, float(conf), camera_name, location, camera_id)
                 else:
                     tracker.fall_suspected_since = None
+                    tracker.fall_start_pos = None
                     tracker.alert_sent = False
 
                 # Gambar status teks ke frame
@@ -274,8 +291,16 @@ class FallDetector:
                 color = (0, 0, 255) if "FALL" in status_text else ((0, 165, 255) if "Suspected" in status_text else (0, 255, 0))
                 cv2.putText(
                     annotated_frame, f"ID {track_id}: {status_text}",
-                    (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+                    (x1, max(y1 - 10, 25)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2,
                 )
+                if "FALL DETECTED" in status_text:
+                    # Gambar border merah peringatan di sekeliling frame video
+                    h_frame, w_frame = annotated_frame.shape[:2]
+                    cv2.rectangle(annotated_frame, (0, 0), (w_frame - 1, h_frame - 1), (0, 0, 255), 6)
+                    cv2.putText(
+                        annotated_frame, "PERINGATAN: JATUH TERDETEKSI!",
+                        (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3
+                    )
 
                 # Set telemetry
                 telemetry.update({

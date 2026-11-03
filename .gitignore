@@ -15,6 +15,10 @@ __pycache__/
 # Large model weights (optional: user can decide whether to git commit model or use releases)
 # models_ai/*.pt
 
+# Generated snapshots
+static/uploads/fall_*.jpg
+
+
 # OS files
 .DS_Store
 Thumbs.db

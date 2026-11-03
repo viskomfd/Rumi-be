@@ -173,19 +173,17 @@ class SupabaseService:
     # CAMERA OPERATIONS
     # ==========================
     async def get_cameras(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not user_id:
+            return []
+
         if self.is_connected:
             try:
-                query = self.client.table("cameras").select("*")
-                if user_id:
-                    query = query.eq("user_id", user_id)
-                res = query.order("created_at", desc=False).execute()
+                res = self.client.table("cameras").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
                 return res.data or []
             except Exception as e:
                 logger.error(f"[Supabase] Error get_cameras: {e}")
 
-        if user_id:
-            return [c for c in self._mock_cameras if c.get("user_id") == user_id]
-        return self._mock_cameras
+        return [c for c in self._mock_cameras if c.get("user_id") == user_id]
 
     async def create_camera(self, camera_data: Dict[str, Any]) -> Dict[str, Any]:
         camera_data["id"] = camera_data.get("id") or str(uuid.uuid4())
@@ -220,24 +218,46 @@ class SupabaseService:
         ]
         return len(self._mock_cameras) < initial_len
 
+    async def get_camera_by_id(self, camera_id: str) -> Optional[Dict[str, Any]]:
+        if self.is_connected:
+            try:
+                res = self.client.table("cameras").select("*").eq("id", camera_id).execute()
+                if res.data and len(res.data) > 0:
+                    return res.data[0]
+            except Exception as e:
+                logger.error(f"[Supabase] Error get_camera_by_id: {e}")
+
+        for c in self._mock_cameras:
+            if c["id"] == camera_id:
+                return c
+        return None
+
     # ==========================
     # INCIDENT OPERATIONS
     # ==========================
-    async def get_incidents(self, days: Optional[int] = None, location: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_incidents(
+        self,
+        days: Optional[int] = None,
+        location: Optional[str] = None,
+        camera_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        if not camera_ids:
+            return []
+
         if self.is_connected:
             try:
-                query = self.client.table("incidents").select("*").order("detected_at", desc=True)
+                query = self.client.table("incidents").select("*").in_("camera_id", camera_ids).order("detected_at", desc=True)
                 if location and location.lower() != "all":
                     query = query.ilike("location", f"%{location}%")
                 if days:
                     start_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
                     query = query.gte("detected_at", start_date)
                 res = query.execute()
-                return res.data
+                return res.data or []
             except Exception as e:
                 logger.error(f"[Supabase] Error get_incidents: {e}")
 
-        results = self._mock_incidents
+        results = [inc for inc in self._mock_incidents if inc.get("camera_id") in camera_ids]
         if location and location.lower() != "all":
             results = [inc for inc in results if location.lower() in inc.get("location", "").lower()]
         return results

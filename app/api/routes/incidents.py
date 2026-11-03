@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Query, status
-from typing import List, Optional
+from fastapi import APIRouter, Query, status, Depends
+from typing import List, Optional, Dict, Any
 from app.schemas.incident import IncidentCreate, IncidentResponse
 from app.core.supabase import db
+from app.api.deps import get_current_user
 from app.services.alert_manager import alert_manager
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
@@ -9,9 +10,15 @@ router = APIRouter(prefix="/incidents", tags=["Incidents"])
 @router.get("", response_model=List[IncidentResponse])
 async def list_incidents(
     days: Optional[int] = Query(None, description="Filter hari terakhir, cth: 7, 30, 90"),
-    location: Optional[str] = Query(None, description="Filter lokasi kamera, cth: ruang-tamu, all")
+    location: Optional[str] = Query(None, description="Filter lokasi kamera, cth: ruang-tamu, all"),
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    incidents = await db.get_incidents(days=days, location=location)
+    user_cameras = await db.get_cameras(user_id=current_user["id"])
+    camera_ids = [c["id"] for c in user_cameras]
+    if not camera_ids:
+        return []
+
+    incidents = await db.get_incidents(days=days, location=location, camera_ids=camera_ids)
     return [
         IncidentResponse(
             id=inc["id"],
@@ -32,6 +39,17 @@ async def list_incidents(
 @router.post("", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
 async def create_incident(incident_in: IncidentCreate):
     incident_data = incident_in.model_dump()
+
+    # Jika camera_id belum diset, coba kaitkan dengan kamera yang cocok berdasarkan nama/lokasi
+    if not incident_data.get("camera_id") and incident_data.get("camera_name"):
+        if db.is_connected:
+            try:
+                cam_res = db.client.table("cameras").select("id").ilike("name", f"%{incident_data['camera_name']}%").limit(1).execute()
+                if cam_res.data:
+                    incident_data["camera_id"] = cam_res.data[0]["id"]
+            except Exception:
+                pass
+
     created = await db.create_incident(incident_data)
 
     # Broadcast ke WebSocket client secara real-time
