@@ -91,6 +91,7 @@ async def stream_camera(camera_id: str, request: Request):
 
     worker = camera_stream_manager.get_or_create_worker(
         camera_id=camera_id,
+        user_id=camera.get("user_id", ""),
         stream_url=stream_url,
         name=camera.get("name", "Kamera CCTV"),
         location=camera.get("location", "Ruang Tamu")

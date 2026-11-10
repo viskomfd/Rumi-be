@@ -29,8 +29,9 @@ class CameraWorker:
     - Thread 2 (Process): Khusus encoding JPEG dan inferensi AI pada frame terbaru.
     """
 
-    def __init__(self, camera_id: str, stream_url: str, name: str, location: str):
+    def __init__(self, camera_id: str, user_id: str, stream_url: str, name: str, location: str):
         self.camera_id = camera_id
+        self.user_id = user_id
         self.stream_url = stream_url
         self.name = name
         self.location = location
@@ -153,7 +154,7 @@ class CameraWorker:
 
                 # Simpan ke Supabase & siarkan via WebSocket
                 asyncio.run(db.create_incident(incident_payload))
-                asyncio.run(alert_manager.broadcast_fall_alert(incident_payload))
+                asyncio.run(alert_manager.broadcast_fall_alert(incident_payload, user_id=self.user_id))
                 logger.info(f"[CameraWorker] Alert jatuh berhasil dikirim: {self.name}")
             except Exception as e:
                 logger.error(f"[CameraWorker] Gagal dispatch alert async: {e}")
@@ -276,21 +277,21 @@ class CameraStreamManager:
         self.workers: Dict[str, CameraWorker] = {}
         self.lock = threading.Lock()
 
-    def get_or_create_worker(self, camera_id: str, stream_url: str, name: str, location: str) -> CameraWorker:
+    def get_or_create_worker(self, camera_id: str, user_id: str, stream_url: str, name: str, location: str) -> CameraWorker:
         with self.lock:
             if camera_id in self.workers:
                 worker = self.workers[camera_id]
                 # Jika stream_url berubah, perbarui worker
                 if worker.stream_url != stream_url:
                     worker.stop()
-                    worker = CameraWorker(camera_id, stream_url, name, location)
+                    worker = CameraWorker(camera_id, user_id, stream_url, name, location)
                     self.workers[camera_id] = worker
                     worker.start()
                 elif not worker.running:
                     worker.start()
                 return worker
 
-            worker = CameraWorker(camera_id, stream_url, name, location)
+            worker = CameraWorker(camera_id, user_id, stream_url, name, location)
             self.workers[camera_id] = worker
             worker.start()
             return worker

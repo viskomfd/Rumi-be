@@ -3,7 +3,11 @@ from app.schemas.user import PasswordChange, UserRegister, UserLogin, UserRespon
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.supabase import db
 from app.api.deps import get_current_user
+from datetime import datetime, timezone
 from typing import Dict, Any
+import uuid
+
+from app.services.alert_manager import alert_manager
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -123,3 +127,20 @@ async def logout_all(current_user: Dict[str, Any] = Depends(get_current_user)):
     })
     if not updated_user:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sesi gagal dihentikan.")
+
+@router.post("/test-notification")
+async def test_notification(current_user: Dict[str, Any] = Depends(get_current_user)):
+    incident = {
+        "id": str(uuid.uuid4()),
+        "camera_name": "Uji Notifikasi",
+        "location": "Perangkat Anda",
+        "person_name": current_user.get("elderly_name") or "Lansia",
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "confidence": 1.0,
+        "snapshot_url": None,
+        "clip_duration": "0 dtk",
+        "response_time_seconds": 0.0,
+        "status": "test",
+    }
+    await alert_manager.broadcast_fall_alert(incident, user_id=current_user["id"])
+    return {"message": "Notifikasi uji dikirim ke perangkat dengan akun yang sama."}

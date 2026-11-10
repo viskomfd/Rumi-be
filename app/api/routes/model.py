@@ -1,11 +1,12 @@
 import os
 import uuid
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, Query, HTTPException
+from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Depends
 
 from models_ai.realtime_fall_detection import detector
 from app.core.supabase import db
 from app.services.alert_manager import alert_manager
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/model", tags=["AI Model & Vision"])
 
@@ -37,7 +38,8 @@ async def detect_frame(
     file: UploadFile = File(...),
     return_annotated: bool = Query(False, description="Sertakan gambar beranotasi dalam format base64"),
     camera_name: str = Query("Ruang Tamu · Cam 01", description="Nama kamera sumber"),
-    location: str = Query("Ruang Tamu", description="Lokasi kamera")
+    location: str = Query("Ruang Tamu", description="Lokasi kamera"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Menerima 1 frame gambar untuk dianalisis oleh model YOLOv8-Pose.
@@ -70,7 +72,7 @@ async def detect_frame(
                 "status": "unresolved"
             }
             saved = await db.create_incident(incident_data)
-            await alert_manager.broadcast_fall_alert(saved)
+            await alert_manager.broadcast_fall_alert(saved, user_id=current_user["id"])
             result["incident_recorded"] = saved
 
         return result
@@ -79,7 +81,7 @@ async def detect_frame(
 
 
 @router.post("/simulate-fall")
-async def trigger_simulated_fall():
+async def trigger_simulated_fall(current_user: Dict[str, Any] = Depends(get_current_user)):
     """
     Endpoint pengujian: Menstimulasi kejadian jatuh buatan.
     Ini akan membuat record baru di database Supabase dan mengirim Fall Alert secara real-time ke WebSocket.
@@ -99,7 +101,7 @@ async def trigger_simulated_fall():
     }
 
     saved = await db.create_incident(incident_data)
-    await alert_manager.broadcast_fall_alert(saved)
+    await alert_manager.broadcast_fall_alert(saved, user_id=current_user["id"])
 
     return {
         "message": "Simulasi kejadian jatuh berhasil dipicu dan di-broadcast!",

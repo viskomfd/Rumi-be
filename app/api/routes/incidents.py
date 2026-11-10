@@ -52,14 +52,17 @@ async def list_incidents(
     ]
 
 @router.post("", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
-async def create_incident(incident_in: IncidentCreate):
+async def create_incident(
+    incident_in: IncidentCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     incident_data = incident_in.model_dump()
 
     # Jika camera_id belum diset, coba kaitkan dengan kamera yang cocok berdasarkan nama/lokasi
     if not incident_data.get("camera_id") and incident_data.get("camera_name"):
         if db.is_connected:
             try:
-                cam_res = db.client.table("cameras").select("id").ilike("name", f"%{incident_data['camera_name']}%").limit(1).execute()
+                cam_res = db.client.table("cameras").select("id").eq("user_id", current_user["id"]).ilike("name", f"%{incident_data['camera_name']}%").limit(1).execute()
                 if cam_res.data:
                     incident_data["camera_id"] = cam_res.data[0]["id"]
             except Exception:
@@ -68,7 +71,7 @@ async def create_incident(incident_in: IncidentCreate):
     created = await db.create_incident(incident_data)
 
     # Broadcast ke WebSocket client secara real-time
-    await alert_manager.broadcast_fall_alert(created)
+    await alert_manager.broadcast_fall_alert(created, user_id=current_user["id"])
 
     return IncidentResponse(
         id=created["id"],

@@ -84,6 +84,7 @@ async def run_tests():
             img_bytes = f.read()
         detect_res = await client.post(
             "/api/model/detect-frame",
+            headers={"Authorization": f"Bearer {token}"},
             files={"file": ("snapshot.jpg", img_bytes, "image/jpeg")}
         )
         assert detect_res.status_code == 200, f"Detect error: {detect_res.text}"
@@ -91,7 +92,10 @@ async def run_tests():
         print(f"  [OK] POST /api/model/detect-frame : Inferensi YOLOv8 Pose Sukses (Status: {detect_data.get('status')}, Latency: {detect_data.get('latency_ms')}ms)")
 
         # 11. Simulate fall
-        fall_res = await client.post("/api/model/simulate-fall")
+        fall_res = await client.post(
+            "/api/model/simulate-fall",
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert fall_res.status_code == 200, f"Simulate fall error: {fall_res.text}"
         print("  [OK] POST /api/model/simulate-fall : Simulasi jatuh ter-trigger & log tersimpan")
 

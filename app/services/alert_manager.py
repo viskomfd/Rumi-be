@@ -1,25 +1,24 @@
 import json
 import logging
-from typing import List, Dict, Any
+from typing import Dict, Any
 from fastapi import WebSocket
 
 logger = logging.getLogger("rumi.alerts")
 
 class AlertManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: Dict[WebSocket, str] = {}
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
+    def connect(self, websocket: WebSocket, user_id: str):
+        self.active_connections[websocket] = user_id
         logger.info(f"[WebSocket] Client terhubung. Total aktif: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+            del self.active_connections[websocket]
             logger.info(f"[WebSocket] Client terputus. Sisa aktif: {len(self.active_connections)}")
 
-    async def broadcast_fall_alert(self, incident: Dict[str, Any]):
+    async def broadcast_fall_alert(self, incident: Dict[str, Any], user_id: str | None = None):
         """Mengirim pesan Fall Alert ke semua client dashboard yang terhubung."""
         message = {
             "type": "FALL_ALERT",
@@ -27,7 +26,9 @@ class AlertManager:
             "data": incident
         }
         dead_connections = []
-        for connection in self.active_connections:
+        for connection, connected_user_id in list(self.active_connections.items()):
+            if user_id and connected_user_id != user_id:
+                continue
             try:
                 await connection.send_text(json.dumps(message))
             except Exception as e:
