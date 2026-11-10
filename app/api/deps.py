@@ -15,11 +15,15 @@ async def get_optional_current_user(credentials: Optional[HTTPAuthorizationCrede
     if payload is None:
         return None
 
-    email: str = payload.get("sub")
-    if email is None:
+    user_id = payload.get("id")
+    email = payload.get("sub")
+    if user_id is None and email is None:
         return None
 
-    return await db.get_user_by_email(email)
+    user = await db.get_user_by_id(user_id) if user_id else await db.get_user_by_email(email)
+    if user and int(payload.get("ver", 0)) == int(user.get("token_version", 0)):
+        return user
+    return None
 
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
     credentials_exception = HTTPException(
@@ -35,12 +39,13 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     if payload is None:
         raise credentials_exception
 
-    email: str = payload.get("sub")
-    if email is None:
+    user_id = payload.get("id")
+    email = payload.get("sub")
+    if user_id is None and email is None:
         raise credentials_exception
 
-    user = await db.get_user_by_email(email)
-    if user is None:
+    user = await db.get_user_by_id(user_id) if user_id else await db.get_user_by_email(email)
+    if user is None or int(payload.get("ver", 0)) != int(user.get("token_version", 0)):
         raise credentials_exception
 
     return user

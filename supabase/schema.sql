@@ -14,9 +14,15 @@ CREATE TABLE IF NOT EXISTS public.users (
     hashed_password TEXT NOT NULL,
     role VARCHAR(100) DEFAULT 'Pendamping',
     avatar_initials VARCHAR(10) DEFAULT 'RA',
+    elderly_name VARCHAR(100),
+    token_version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Aman dijalankan pada database lama yang tabel users-nya sudah ada.
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS elderly_name VARCHAR(100);
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
 
 -- 3. TABEL KAMERA CCTV (CAMERAS)
 CREATE TABLE IF NOT EXISTS public.cameras (

@@ -46,6 +46,8 @@ class SupabaseService:
                 "hashed_password": "$2b$12$EXI5IEvOzDdsutOy7bSjeOKvTq2ulS9CAZkxQbIr814KP9u3besge",
                 "role": "Pendamping",
                 "avatar_initials": "AP",
+                "elderly_name": None,
+                "token_version": 0,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
         ]
@@ -168,6 +170,21 @@ class SupabaseService:
 
         self._mock_users.append(user_data)
         return user_data
+
+    async def update_user(self, user_id: str, user_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        user_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if self.is_connected:
+            try:
+                res = self.client.table("users").update(user_data).eq("id", user_id).execute()
+                return res.data[0] if res.data else None
+            except Exception as e:
+                logger.error(f"[Supabase] Error update_user: {e}")
+                return None
+
+        user = await self.get_user_by_id(user_id)
+        if user:
+            user.update(user_data)
+        return user
 
     # ==========================
     # CAMERA OPERATIONS
