@@ -5,6 +5,7 @@ import uuid
 import logging
 import threading
 import asyncio
+from collections import deque
 from typing import Dict, Optional, Tuple, Any
 
 import numpy as np
@@ -47,6 +48,8 @@ class CameraWorker:
         self.last_frame_time: float = 0
         self.is_online = False
         self.client_count = 0
+        self.clip_frames = deque(maxlen=120)
+        self.last_clip_frame_time = 0.0
 
     def start(self):
         if self.running:
@@ -122,10 +125,18 @@ class CameraWorker:
         """
         def _bg_task():
             try:
-                snapshot_fn = f"fall_{self.camera_id[:8]}_{int(time.time())}.jpg"
+                detected_at = time.time()
+                media_stem = f"fall_{self.camera_id[:8]}_{int(detected_at * 1000)}"
+                snapshot_fn = f"{media_stem}.jpg"
                 static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "static", "uploads"))
                 os.makedirs(static_dir, exist_ok=True)
                 cv2.imwrite(os.path.join(static_dir, snapshot_fn), fall_frame)
+
+                threading.Thread(
+                    target=self._save_fall_clip,
+                    args=(static_dir, media_stem, detected_at),
+                    daemon=True,
+                ).start()
 
                 incident_payload = {
                     "id": str(uuid.uuid4()),
@@ -148,6 +159,54 @@ class CameraWorker:
                 logger.error(f"[CameraWorker] Gagal dispatch alert async: {e}")
 
         threading.Thread(target=_bg_task, daemon=True).start()
+
+    def _save_fall_clip(self, static_dir: str, media_stem: str, detected_at: float):
+        """Simpan 4 detik sebelum dan sesudah deteksi sebagai klip browser-friendly."""
+        time.sleep(4.0)
+        with self.frame_lock:
+            frames = [
+                (timestamp, jpeg)
+                for timestamp, jpeg in self.clip_frames
+                if detected_at - 4.0 <= timestamp <= detected_at + 4.0
+            ]
+        if len(frames) < 2:
+            logger.warning(f"[CameraWorker] Frame klip tidak cukup untuk '{self.name}'")
+            return
+
+        first_frame = cv2.imdecode(np.frombuffer(frames[0][1], dtype=np.uint8), cv2.IMREAD_COLOR)
+        if first_frame is None:
+            return
+        height, width = first_frame.shape[:2]
+        duration = max(frames[-1][0] - frames[0][0], 1.0)
+        fps = min(15.0, max(1.0, len(frames) / duration))
+
+        for extension, codec in ((".webm", "VP80"), (".mp4", "avc1"), (".mp4", "mp4v")):
+            clip_path = os.path.join(static_dir, f"{media_stem}{extension}")
+            writer = cv2.VideoWriter(
+                clip_path,
+                cv2.VideoWriter_fourcc(*codec),
+                fps,
+                (width, height),
+            )
+            if not writer.isOpened():
+                writer.release()
+                if os.path.isfile(clip_path):
+                    os.remove(clip_path)
+                continue
+            for _, jpeg in frames:
+                frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is not None:
+                    if frame.shape[1] != width or frame.shape[0] != height:
+                        frame = cv2.resize(frame, (width, height))
+                    writer.write(frame)
+            writer.release()
+            if os.path.isfile(clip_path) and os.path.getsize(clip_path) > 1024:
+                logger.info(f"[CameraWorker] Klip jatuh tersimpan: {clip_path}")
+                return
+            if os.path.isfile(clip_path):
+                os.remove(clip_path)
+
+        logger.warning(f"[CameraWorker] Codec video tidak tersedia untuk '{self.name}'")
 
     def _process_loop(self):
         """
@@ -173,6 +232,15 @@ class CameraWorker:
                 if self.latest_raw_frame is None:
                     continue
                 current_frame = self.latest_raw_frame.copy()
+
+            if now - self.last_clip_frame_time >= 0.1:
+                encoded, clip_buffer = cv2.imencode(
+                    ".jpg", current_frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
+                )
+                if encoded:
+                    with self.frame_lock:
+                        self.clip_frames.append((time.time(), clip_buffer.tobytes()))
+                    self.last_clip_frame_time = now
 
             frame_idx += 1
 

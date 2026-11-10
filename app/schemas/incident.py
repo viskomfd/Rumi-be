@@ -20,6 +20,7 @@ class IncidentResponse(BaseModel):
     detected_at: str
     confidence: float
     snapshot_url: Optional[str]
+    clip_url: Optional[str] = None
     clip_duration: str
     response_time_seconds: float = 2.4
     status: str

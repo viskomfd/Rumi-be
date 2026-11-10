@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Query, status, Depends
 from typing import List, Optional, Dict, Any
 from app.schemas.incident import IncidentCreate, IncidentResponse
@@ -6,6 +8,18 @@ from app.api.deps import get_current_user
 from app.services.alert_manager import alert_manager
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
+
+UPLOADS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "static", "uploads"))
+
+
+def get_clip_url(snapshot_url: Optional[str]) -> Optional[str]:
+    if not snapshot_url:
+        return None
+    stem = os.path.splitext(os.path.basename(snapshot_url))[0]
+    for extension in (".webm", ".mp4"):
+        if os.path.isfile(os.path.join(UPLOADS_DIR, f"{stem}{extension}")):
+            return f"/static/uploads/{stem}{extension}"
+    return None
 
 @router.get("", response_model=List[IncidentResponse])
 async def list_incidents(
@@ -28,7 +42,8 @@ async def list_incidents(
             person_name=inc.get("person_name", "Pak Hartono"),
             detected_at=inc.get("detected_at", ""),
             confidence=float(inc.get("confidence", 0.95)),
-            snapshot_url=inc.get("snapshot_url") or "/static/uploads/fall-snapshot.jpg",
+            snapshot_url=inc.get("snapshot_url"),
+            clip_url=get_clip_url(inc.get("snapshot_url")),
             clip_duration=inc.get("clip_duration", "8 dtk"),
             response_time_seconds=float(inc.get("response_time_seconds", 2.4)),
             status=inc.get("status", "unresolved")
@@ -64,6 +79,7 @@ async def create_incident(incident_in: IncidentCreate):
         detected_at=created["detected_at"],
         confidence=float(created["confidence"]),
         snapshot_url=created.get("snapshot_url"),
+        clip_url=get_clip_url(created.get("snapshot_url")),
         clip_duration=created.get("clip_duration", "8 dtk"),
         response_time_seconds=float(created.get("response_time_seconds", 2.4)),
         status=created["status"]
