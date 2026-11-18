@@ -38,6 +38,10 @@ app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(model.router, prefix=settings.API_V1_STR)
 app.include_router(ws.router)
 
+# Endpoint langsung untuk menerima alert dari FallDetectionWorker (realtime_fall_detection.py)
+app.post("/api/incident-alerts", tags=["Incidents"])(incidents.handle_incident_alert)
+
+
 @app.get("/", tags=["Health Check"])
 async def root():
     return {

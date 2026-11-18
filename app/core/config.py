@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     # Model Configuration
-    MODEL_PATH: str = "models_ai/yolov8n-pose.pt"
+    MODEL_PATH: str = "models_ai/yolo11_rumi.pt"
+
+    # Internal Worker Token
+    INTERNAL_SERVICE_TOKEN: str = "rumi_internal_worker_secret_2026"
 
     # CORS Configuration
     CORS_ORIGINS: Union[str, List[str]] = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"

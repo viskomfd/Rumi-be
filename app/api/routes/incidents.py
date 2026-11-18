@@ -1,11 +1,15 @@
 import os
 
-from fastapi import APIRouter, Query, status, Depends
+from fastapi import APIRouter, Query, status, Depends, Form, File, UploadFile
 from typing import List, Optional, Dict, Any
+import time
+import uuid
+from datetime import datetime, timezone
 from app.schemas.incident import IncidentCreate, IncidentResponse
 from app.core.supabase import db
 from app.api.deps import get_current_user
 from app.services.alert_manager import alert_manager
+
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
@@ -87,3 +91,77 @@ async def create_incident(
         response_time_seconds=float(created.get("response_time_seconds", 2.4)),
         status=created["status"]
     )
+
+
+@router.post("/incident-alerts", status_code=status.HTTP_200_OK)
+async def handle_incident_alert(
+    camera_id: str = Form(...),
+    camera_name: Optional[str] = Form(None),
+    location: Optional[str] = Form(None),
+    confidence: float = Form(0.92),
+    clip_duration_seconds: Optional[int] = Form(0),
+    thumbnail: Optional[UploadFile] = File(None),
+    clip: Optional[UploadFile] = File(None),
+):
+    """
+    Menerima alert insiden dari FallDetectionWorker (realtime_fall_detection.py / manager.py).
+    Menyimpan snapshot JPEG dan video clip MP4 (jika ada), mencatat ke Supabase,
+    dan mengirim broadcast WebSocket real-time ke web dashboard.
+    """
+    ts = int(time.time() * 1000)
+    stem = f"fall_{camera_id[:8]}_{ts}"
+    snapshot_filename = f"{stem}.jpg"
+    clip_filename = f"{stem}.mp4"
+
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+    snapshot_url = None
+    if thumbnail:
+        thumb_bytes = await thumbnail.read()
+        thumb_path = os.path.join(UPLOADS_DIR, snapshot_filename)
+        with open(thumb_path, "wb") as f:
+            f.write(thumb_bytes)
+        snapshot_url = f"/static/uploads/{snapshot_filename}"
+
+    if clip:
+        clip_bytes = await clip.read()
+        clip_path = os.path.join(UPLOADS_DIR, clip_filename)
+        with open(clip_path, "wb") as f:
+            f.write(clip_bytes)
+
+    # Cari data pemilik kamera dari database
+    user_id = None
+    camera = await db.get_camera_by_id(camera_id)
+    if camera:
+        user_id = camera.get("user_id")
+        camera_name = camera_name or camera.get("name", "Kamera CCTV")
+        location = location or camera.get("location", "Ruang Tamu")
+    else:
+        camera_name = camera_name or "Kamera CCTV"
+        location = location or "Ruang Tamu"
+
+    duration_str = f"{clip_duration_seconds} dtk" if (clip_duration_seconds and clip_duration_seconds > 0) else "8 dtk"
+
+    incident_data = {
+        "id": str(uuid.uuid4()),
+        "camera_id": camera_id,
+        "camera_name": camera_name,
+        "location": location,
+        "person_name": "Pak Hartono",
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "confidence": float(confidence),
+        "snapshot_url": snapshot_url or "/static/uploads/fall-snapshot.jpg",
+        "clip_duration": duration_str,
+        "response_time_seconds": 2.1,
+        "status": "unresolved"
+    }
+
+    created = await db.create_incident(incident_data)
+    await alert_manager.broadcast_fall_alert(created, user_id=user_id)
+
+    return {
+        "status": "success",
+        "message": "Incident alert berhasil diproses",
+        "incident": created
+    }
+

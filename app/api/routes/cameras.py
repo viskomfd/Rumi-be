@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from typing import List, Optional, Dict, Any
 from app.schemas.camera import CameraCreate, CameraResponse
 from app.core.supabase import db
+from app.core.config import settings
 from app.api.deps import get_current_user, get_optional_current_user
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
@@ -13,7 +14,35 @@ def detect_protocol(url: str) -> str:
     return "HTTP"
 
 @router.get("", response_model=List[CameraResponse])
-async def list_cameras(current_user: Dict[str, Any] = Depends(get_current_user)):
+async def list_cameras(
+    request: Request,
+    is_active: Optional[bool] = None,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+):
+    # Jika dipanggil oleh background supervisor (manager.py) via X-Internal-Token
+    internal_token = request.headers.get("X-Internal-Token")
+    if internal_token and internal_token == settings.INTERNAL_SERVICE_TOKEN:
+        cameras = await db.get_all_active_cameras()
+        return [
+            CameraResponse(
+                id=c["id"],
+                name=c["name"],
+                location=c["location"],
+                url=c.get("url") or c.get("stream_url", ""),
+                protocol=c.get("protocol") or detect_protocol(c.get("url") or c.get("stream_url", "")),
+                status=c.get("status", "online"),
+                created_at=c.get("created_at")
+            )
+            for c in cameras
+        ]
+
+    # Akses normal oleh pengguna login
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Autentikasi gagal atau token tidak valid"
+        )
+
     cameras = await db.get_cameras(user_id=current_user["id"])
     return [
         CameraResponse(
@@ -27,6 +56,7 @@ async def list_cameras(current_user: Dict[str, Any] = Depends(get_current_user))
         )
         for c in cameras
     ]
+
 
 @router.post("", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
 async def add_camera(
@@ -62,6 +92,13 @@ import asyncio
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from app.services.camera_stream_manager import camera_stream_manager
+
+@router.patch("/{camera_id}/status")
+async def update_camera_status(camera_id: str, payload: Dict[str, Any]):
+    """Update status kamera (online / offline) dari worker/supervisor deteksi jatuh."""
+    status_str = str(payload.get("status", "online")).lower()
+    await db.update_camera_status(camera_id, status_str)
+    return {"status": "ok", "camera_id": camera_id, "camera_status": status_str}
 
 @router.delete("/{camera_id}", status_code=status.HTTP_200_OK)
 async def delete_camera(

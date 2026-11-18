@@ -3,7 +3,15 @@ import uuid
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Depends
 
-from models_ai.realtime_fall_detection import detector
+from models_ai.realtime_fall_detection import (
+    detector,
+    ASPECT_RATIO_THRESHOLD,
+    TORSO_ANGLE_THRESHOLD,
+    VERTICAL_VELOCITY_THRESHOLD,
+    FLOOR_COLLAPSE_THRESHOLD,
+    INACTIVITY_SECONDS,
+    CONF_THRESHOLD,
+)
 from app.core.supabase import db
 from app.services.alert_manager import alert_manager
 from app.api.deps import get_current_user
@@ -13,24 +21,26 @@ router = APIRouter(prefix="/model", tags=["AI Model & Vision"])
 
 @router.get("/status")
 async def get_model_status():
-    """Cek status kesiapan file model yolov8n-pose.pt."""
+    """Cek status kesiapan file model yolo11_rumi.pt."""
     return {
         "model_file": detector.model_path,
         "is_model_loaded": detector.is_loaded,
-        "mode": "YOLOv8-Pose (Active)" if detector.is_loaded else "Mock / Adapter Mode (Model file missing)",
+        "mode": "YOLO11-Pose (Active - 4D Grid Search)" if detector.is_loaded else "Mock / Adapter Mode (Model file missing)",
         "thresholds": {
-            "aspect_ratio_threshold": 0.55,
-            "torso_angle_threshold": 40.0,
-            "vertical_velocity_threshold": 25.0,
-            "inactivity_seconds": 3.0,
-            "confidence_threshold": 0.5
+            "aspect_ratio_threshold": ASPECT_RATIO_THRESHOLD,
+            "torso_angle_threshold": TORSO_ANGLE_THRESHOLD,
+            "vertical_velocity_threshold": VERTICAL_VELOCITY_THRESHOLD,
+            "floor_collapse_threshold": FLOOR_COLLAPSE_THRESHOLD,
+            "inactivity_seconds": INACTIVITY_SECONDS,
+            "confidence_threshold": CONF_THRESHOLD
         },
         "message": (
-            "Model YOLOv8-pose aktif dan siap mendeteksi jatuh!"
+            "Model YOLO11-pose (yolo11_rumi.pt) kalibrasi 4D Grid Search aktif dan siap mendeteksi jatuh!"
             if detector.is_loaded
-            else f"Letakkan file 'yolov8n-pose.pt' di folder 'models_ai/' untuk mengaktifkan model asli."
+            else f"Letakkan file 'yolo11_rumi.pt' di folder 'models_ai/' untuk mengaktifkan model asli."
         )
     }
+
 
 
 @router.post("/detect-frame")

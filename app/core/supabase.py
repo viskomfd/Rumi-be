@@ -202,6 +202,32 @@ class SupabaseService:
 
         return [c for c in self._mock_cameras if c.get("user_id") == user_id]
 
+    async def get_all_active_cameras(self) -> List[Dict[str, Any]]:
+        if self.is_connected:
+            try:
+                res = self.client.table("cameras").select("*").eq("is_active", True).order("created_at", desc=False).execute()
+                return res.data or []
+            except Exception as e:
+                logger.error(f"[Supabase] Error get_all_active_cameras: {e}")
+
+        return [c for c in self._mock_cameras if c.get("is_active", True)]
+
+    async def update_camera_status(self, camera_id: str, status: str) -> bool:
+        if self.is_connected:
+            try:
+                self.client.table("cameras").update({"status": status}).eq("id", camera_id).execute()
+                return True
+            except Exception as e:
+                logger.error(f"[Supabase] Error update_camera_status: {e}")
+                return False
+
+        for c in self._mock_cameras:
+            if c["id"] == camera_id:
+                c["status"] = status
+                return True
+        return False
+
+
     async def create_camera(self, camera_data: Dict[str, Any]) -> Dict[str, Any]:
         camera_data["id"] = camera_data.get("id") or str(uuid.uuid4())
         camera_data["created_at"] = datetime.now(timezone.utc).isoformat()

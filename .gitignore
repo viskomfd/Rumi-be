@@ -15,8 +15,10 @@ __pycache__/
 # Large model weights (optional: user can decide whether to git commit model or use releases)
 # models_ai/*.pt
 
-# Generated snapshots
+# Generated snapshots and video clips
 static/uploads/fall_*.jpg
+static/uploads/fall_*.webm
+static/uploads/fall_*.mp4
 
 
 # OS files

@@ -314,12 +314,14 @@ class CameraStreamManager:
             worker = self.workers.pop(camera_id, None)
             if worker:
                 worker.stop()
+            detector.reset_trackers(camera_id)
 
     def stop_all(self):
         with self.lock:
             for worker in self.workers.values():
                 worker.stop()
             self.workers.clear()
+            detector.reset_trackers()
 
 
 camera_stream_manager = CameraStreamManager()
