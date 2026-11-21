@@ -24,3 +24,7 @@ static/uploads/fall_*.mp4
 # OS files
 .DS_Store
 Thumbs.db
+
+# Executables & Local Binaries
+*.exe
+ngrok.exe
