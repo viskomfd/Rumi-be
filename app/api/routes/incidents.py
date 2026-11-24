@@ -165,3 +165,151 @@ async def handle_incident_alert(
         "incident": created
     }
 
+
+@router.post("/on-device-alert", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
+async def report_on_device_alert(
+    camera_id: Optional[str] = Form(None),
+    camera_name: Optional[str] = Form(None),
+    location: Optional[str] = Form(None),
+    person_name: Optional[str] = Form(None),
+    confidence: float = Form(0.90),
+    clip_duration: str = Form("0 dtk"),
+    thumbnail: Optional[UploadFile] = File(None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Mencatat insiden jatuh dari Kamera Device (On-Device WebAssembly/WebGPU) ke database Riwayat
+    dan menyiarkan alert real-time via WebSocket.
+    """
+    user_id = current_user["id"]
+    user_cameras = await db.get_cameras(user_id=user_id)
+
+    resolved_camera = None
+    if camera_id:
+        resolved_camera = next((c for c in user_cameras if c.get("id") == camera_id), None)
+
+    if not resolved_camera and camera_name:
+        target_name = camera_name.strip().lower()
+        resolved_camera = next(
+            (c for c in user_cameras if (c.get("name") or "").strip().lower() == target_name),
+            None,
+        )
+
+    if not resolved_camera:
+        resolved_camera = next(
+            (
+                c
+                for c in user_cameras
+                if (c.get("protocol") or "").upper() == "DEVICE"
+                or str(c.get("stream_url") or c.get("url") or "").lower().startswith("device://")
+            ),
+            None,
+        )
+
+    if not resolved_camera:
+        resolved_camera = await db.create_camera({
+            "user_id": user_id,
+            "name": (camera_name or "Kamera Device").strip(),
+            "location": (location or "Perangkat Lokal").strip(),
+            "stream_url": "device://user",
+            "protocol": "DEVICE",
+            "status": "online",
+            "is_active": False,
+        })
+
+    resolved_cam_id = resolved_camera["id"]
+    resolved_cam_name = (camera_name or resolved_camera.get("name") or "Kamera Device").strip()
+    resolved_location = (location or resolved_camera.get("location") or "Perangkat Lokal").strip()
+    resolved_person = (person_name or current_user.get("elderly_name") or "Pak Hartono").strip()
+
+    snapshot_url = None
+    if thumbnail is not None:
+        thumb_bytes = await thumbnail.read()
+        if thumb_bytes:
+            os.makedirs(UPLOADS_DIR, exist_ok=True)
+            ts = int(time.time() * 1000)
+            snapshot_filename = f"fall_{resolved_cam_id[:8]}_{ts}.jpg"
+            with open(os.path.join(UPLOADS_DIR, snapshot_filename), "wb") as f:
+                f.write(thumb_bytes)
+            snapshot_url = f"/static/uploads/{snapshot_filename}"
+
+    incident_data = {
+        "id": str(uuid.uuid4()),
+        "camera_id": resolved_cam_id,
+        "camera_name": resolved_cam_name,
+        "location": resolved_location,
+        "person_name": resolved_person,
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "confidence": round(float(confidence), 2),
+        "snapshot_url": snapshot_url,
+        "clip_duration": clip_duration,
+        "response_time_seconds": 1.2,
+        "status": "unresolved",
+    }
+
+    created = await db.create_incident(incident_data)
+    await alert_manager.broadcast_fall_alert(created, user_id=user_id)
+
+    return IncidentResponse(
+        id=created["id"],
+        camera_id=created.get("camera_id"),
+        camera_name=created["camera_name"],
+        location=created["location"],
+        person_name=created["person_name"],
+        detected_at=created["detected_at"],
+        confidence=float(created["confidence"]),
+        snapshot_url=created.get("snapshot_url"),
+        clip_url=get_clip_url(created.get("snapshot_url")),
+        clip_duration=created.get("clip_duration", clip_duration),
+        response_time_seconds=float(created.get("response_time_seconds", 1.2)),
+        status=created["status"],
+    )
+
+
+@router.post("/{incident_id}/clip", status_code=status.HTTP_200_OK)
+async def upload_incident_clip(
+    incident_id: str,
+    clip: UploadFile = File(...),
+    clip_duration: str = Form("5 dtk"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Menyimpan file klip video (.webm/.mp4) untuk insiden yang sudah tercatat (mis. dari Kamera Device)
+    dengan nama file yang selaras dengan snapshot_url agar langsung muncul di halaman Riwayat.
+    """
+    user_cameras = await db.get_cameras(user_id=current_user["id"])
+    camera_ids = [c["id"] for c in user_cameras]
+    incidents = await db.get_incidents(camera_ids=camera_ids)
+    target = next((inc for inc in incidents if inc.get("id") == incident_id), None)
+
+    snapshot_url = target.get("snapshot_url") if target else None
+    if snapshot_url:
+        stem = os.path.splitext(os.path.basename(snapshot_url))[0]
+    else:
+        stem = f"fall_{incident_id[:8]}"
+
+    ext = ".mp4" if (clip.content_type or "").lower().endswith("mp4") else ".webm"
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    clip_bytes = await clip.read()
+    clip_path = os.path.join(UPLOADS_DIR, f"{stem}{ext}")
+    with open(clip_path, "wb") as f:
+        f.write(clip_bytes)
+
+    if db.is_connected:
+        try:
+            db.client.table("incidents").update({"clip_duration": clip_duration}).eq("id", incident_id).execute()
+        except Exception:
+            pass
+    else:
+        for inc in db._mock_incidents:
+            if inc.get("id") == incident_id:
+                inc["clip_duration"] = clip_duration
+                break
+
+    return {
+        "status": "success",
+        "incident_id": incident_id,
+        "clip_url": f"/static/uploads/{stem}{ext}",
+        "clip_duration": clip_duration,
+    }
+
