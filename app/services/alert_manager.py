@@ -21,7 +21,12 @@ class AlertManager:
             del self.active_connections[websocket]
             logger.info(f"[WebSocket] Client terputus. Sisa aktif: {len(self.active_connections)}")
 
-    async def broadcast_fall_alert(self, incident: Dict[str, Any], user_id: str | None = None):
+    async def broadcast_fall_alert(
+        self,
+        incident: Dict[str, Any],
+        user_id: str | None = None,
+        send_push: bool = True,
+    ):
         """Mengirim pesan Fall Alert ke WebSocket aktif dan Web Push (PWA background)."""
         message = {
             "type": "FALL_ALERT",
@@ -42,7 +47,7 @@ class AlertManager:
             self.disconnect(dead)
 
         # Kirim Web Push secara non-blocking agar HP/laptop tetap menerima notif meski browser ditutup
-        if user_id:
+        if send_push and user_id:
             try:
                 asyncio.create_task(push_service.send_fall_alert(user_id=user_id, incident=incident))
             except Exception as e:

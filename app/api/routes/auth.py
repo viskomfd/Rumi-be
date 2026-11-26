@@ -8,6 +8,7 @@ from typing import Dict, Any
 import uuid
 
 from app.services.alert_manager import alert_manager
+from app.services.push_service import push_service
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -142,5 +143,14 @@ async def test_notification(current_user: Dict[str, Any] = Depends(get_current_u
         "response_time_seconds": 0.0,
         "status": "test",
     }
-    await alert_manager.broadcast_fall_alert(incident, user_id=current_user["id"])
-    return {"message": "Notifikasi uji dikirim ke perangkat dengan akun yang sama."}
+    await alert_manager.broadcast_fall_alert(incident, user_id=current_user["id"], send_push=False)
+    push_result = await push_service.send_fall_alert(user_id=current_user["id"], incident=incident)
+
+    if push_result["sent"] > 0:
+        msg = f"Notifikasi uji dikirim (Web Push terkirim ke {push_result['sent']} perangkat)."
+    elif push_result["removed"] > 0:
+        msg = "Token push perangkat sebelumnya sudah kedaluwarsa (410 Gone) & telah dibersihkan. Silakan matikan lalu nyalakan ulang toggle Notifikasi Push di HP Anda."
+    else:
+        msg = "Notifikasi uji WebSocket dikirim, tetapi belum ada perangkat aktif yang berlangganan Web Push. Aktifkan toggle Notifikasi Push di PWA HP Anda."
+
+    return {"message": msg, "push": push_result}
