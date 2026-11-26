@@ -77,6 +77,20 @@ class CameraWorker:
     def remove_client(self):
         self.client_count = max(0, self.client_count - 1)
 
+    def _set_online_state(self, online: bool):
+        changed = self.is_online != online
+        self.is_online = online
+        if changed:
+            status_str = "online" if online else "offline"
+
+            def _sync_db():
+                try:
+                    asyncio.run(db.update_camera_status(self.camera_id, status_str))
+                except Exception as e:
+                    logger.warning(f"[CameraWorker] Gagal sinkron status kamera '{self.name}': {e}")
+
+            threading.Thread(target=_sync_db, daemon=True).start()
+
     def _capture_loop(self):
         """
         Thread Producer: Hanya bertugas membaca cap.read() secepat mungkin.
@@ -97,13 +111,13 @@ class CameraWorker:
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not cap.isOpened():
-                self.is_online = False
+                self._set_online_state(False)
                 cap.release()
                 time.sleep(reconnect_delay)
                 reconnect_delay = min(5.0, reconnect_delay * 1.5)
                 continue
 
-            self.is_online = True
+            self._set_online_state(True)
             reconnect_delay = 1.0
             consecutive_empty = 0
 
@@ -145,7 +159,7 @@ class CameraWorker:
                         time.sleep(sleep_time)
 
             cap.release()
-            self.is_online = False
+            self._set_online_state(False)
             time.sleep(1.0)
 
     def _dispatch_fall_alert_async(self, fall_frame: np.ndarray, track_id: int, conf: float):
@@ -337,6 +351,13 @@ class CameraStreamManager:
         if not worker:
             return False
         return worker.is_online and (time.time() - worker.last_frame_time < 5.0)
+
+    def get_live_status(self, camera_id: str, fallback_status: str = "online") -> str:
+        """Mengembalikan status live ('online' / 'offline') jika worker aktif, atau fallback dari DB."""
+        if camera_id in self.workers:
+            return "online" if self.is_camera_online(camera_id) else "offline"
+        normalized = str(fallback_status or "online").lower()
+        return "offline" if normalized == "offline" else "online"
 
     def stop_camera(self, camera_id: str):
         with self.lock:

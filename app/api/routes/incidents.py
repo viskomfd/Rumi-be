@@ -1,11 +1,11 @@
 import os
 
-from fastapi import APIRouter, Query, status, Depends, Form, File, UploadFile
+from fastapi import APIRouter, Query, status, Depends, Form, File, UploadFile, HTTPException
 from typing import List, Optional, Dict, Any
 import time
 import uuid
 from datetime import datetime, timezone
-from app.schemas.incident import IncidentCreate, IncidentResponse
+from app.schemas.incident import IncidentCreate, IncidentStatusUpdate, IncidentResponse
 from app.core.supabase import db
 from app.api.deps import get_current_user
 from app.services.alert_manager import alert_manager
@@ -24,6 +24,23 @@ def get_clip_url(snapshot_url: Optional[str]) -> Optional[str]:
         if os.path.isfile(os.path.join(UPLOADS_DIR, f"{stem}{extension}")):
             return f"/static/uploads/{stem}{extension}"
     return None
+
+
+def _cleanup_incident_media(snapshot_url: Optional[str]) -> None:
+    """Hapus file snapshot & klip video terkait di static/uploads (kecuali gambar demo bawaan)."""
+    if not snapshot_url:
+        return
+    basename = os.path.basename(snapshot_url)
+    if basename == "fall-snapshot.jpg":
+        return
+    stem = os.path.splitext(basename)[0]
+    for filename in (basename, f"{stem}.webm", f"{stem}.mp4"):
+        file_path = os.path.join(UPLOADS_DIR, filename)
+        if os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
 
 @router.get("", response_model=List[IncidentResponse])
 async def list_incidents(
@@ -311,5 +328,98 @@ async def upload_incident_clip(
         "incident_id": incident_id,
         "clip_url": f"/static/uploads/{stem}{ext}",
         "clip_duration": clip_duration,
+    }
+
+
+@router.patch("/{incident_id}/status", response_model=IncidentResponse)
+async def update_incident_status(
+    incident_id: str,
+    payload: IncidentStatusUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    Memperbarui status insiden ('unresolved' | 'acknowledged' | 'resolved').
+    Saat frontend mengubah status ke 'acknowledged' atau 'resolved' (mis. setelah user klik Lihat Detail),
+    insiden ini tidak lagi muncul sebagai banner alert aktif di Dashboard.
+    """
+    user_cameras = await db.get_cameras(user_id=current_user["id"])
+    camera_ids = {c["id"] for c in user_cameras}
+
+    existing = await db.get_incident_by_id(incident_id)
+    if not existing or (existing.get("camera_id") not in camera_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Insiden tidak ditemukan atau bukan milik Anda",
+        )
+
+    updated = await db.update_incident_status(incident_id, payload.status)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal memperbarui status insiden",
+        )
+
+    return IncidentResponse(
+        id=updated["id"],
+        camera_id=updated.get("camera_id"),
+        camera_name=updated.get("camera_name", "Kamera CCTV"),
+        location=updated.get("location", "Ruang Tamu"),
+        person_name=updated.get("person_name", "Pak Hartono"),
+        detected_at=updated.get("detected_at", ""),
+        confidence=float(updated.get("confidence", 0.95)),
+        snapshot_url=updated.get("snapshot_url"),
+        clip_url=get_clip_url(updated.get("snapshot_url")),
+        clip_duration=updated.get("clip_duration", "8 dtk"),
+        response_time_seconds=float(updated.get("response_time_seconds", 2.4)),
+        status=updated.get("status", payload.status),
+    )
+
+
+@router.delete("/{incident_id}", status_code=status.HTTP_200_OK)
+async def delete_incident(
+    incident_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Menghapus 1 riwayat insiden milik user beserta file snapshot & klipnya."""
+    user_cameras = await db.get_cameras(user_id=current_user["id"])
+    camera_ids = {c["id"] for c in user_cameras}
+
+    existing = await db.get_incident_by_id(incident_id)
+    if not existing or (existing.get("camera_id") not in camera_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Insiden tidak ditemukan atau bukan milik Anda",
+        )
+
+    deleted = await db.delete_incident(incident_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Gagal menghapus insiden",
+        )
+
+    _cleanup_incident_media(existing.get("snapshot_url"))
+    return {"message": "Riwayat insiden berhasil dihapus", "id": incident_id}
+
+
+@router.delete("", status_code=status.HTTP_200_OK)
+async def clear_all_incidents(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Menghapus seluruh riwayat insiden milik user beserta file snapshot & klipnya."""
+    user_cameras = await db.get_cameras(user_id=current_user["id"])
+    camera_ids = [c["id"] for c in user_cameras]
+    if not camera_ids:
+        return {"message": "Tidak ada riwayat untuk dihapus", "deleted_count": 0}
+
+    existing_list = await db.get_incidents(camera_ids=camera_ids)
+    deleted_count = await db.delete_incidents_by_camera_ids(camera_ids)
+
+    for inc in existing_list:
+        _cleanup_incident_media(inc.get("snapshot_url"))
+
+    return {
+        "message": "Semua riwayat insiden berhasil dihapus",
+        "deleted_count": deleted_count,
     }
 

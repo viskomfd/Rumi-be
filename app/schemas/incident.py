@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 
 class IncidentCreate(BaseModel):
     camera_id: Optional[str] = None
@@ -10,6 +10,9 @@ class IncidentCreate(BaseModel):
     snapshot_url: Optional[str] = "/static/uploads/fall-snapshot.jpg"
     clip_duration: str = "8 dtk"
     status: str = "unresolved"
+
+class IncidentStatusUpdate(BaseModel):
+    status: Literal["unresolved", "acknowledged", "resolved"]
 
 class IncidentResponse(BaseModel):
     id: str

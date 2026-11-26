@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from app.schemas.dashboard import DashboardStats, WeeklyActivityItem
 from app.core.supabase import db
 from app.api.deps import get_current_user
+from app.services.camera_stream_manager import camera_stream_manager
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -62,9 +63,23 @@ async def get_dashboard_summary(current_user: Dict[str, Any] = Depends(get_curre
     camera_ids = [c["id"] for c in cameras]
     incidents = await db.get_incidents(camera_ids=camera_ids) if camera_ids else []
 
-    active_count = len([c for c in cameras if c.get("status") == "online"])
+    active_count = 0
+    for c in cameras:
+        cam_proto = (c.get("protocol") or "").upper()
+        db_status = str(c.get("status", "online")).lower()
+        live_status = (
+            db_status
+            if cam_proto == "DEVICE"
+            else camera_stream_manager.get_live_status(c["id"], db_status)
+        )
+        if live_status == "online":
+            active_count += 1
+
     total_count = len(cameras)
-    latest = incidents[0] if incidents else None
+    unresolved_incidents = [
+        inc for inc in incidents if str(inc.get("status") or "unresolved").lower() == "unresolved"
+    ]
+    latest = unresolved_incidents[0] if unresolved_incidents else None
 
     # Hitung data riil mingguan dan insiden hari ini
     weekly, today_incidents = calculate_weekly_distribution(incidents)

@@ -243,6 +243,28 @@ class SupabaseService:
         self._mock_cameras.append(camera_data)
         return camera_data
 
+    async def update_camera(self, camera_id: str, user_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        payload = {**update_data, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if self.is_connected:
+            try:
+                res = (
+                    self.client.table("cameras")
+                    .update(payload)
+                    .eq("id", camera_id)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                return res.data[0] if res.data else None
+            except Exception as e:
+                logger.error(f"[Supabase] Error update_camera: {e}")
+                return None
+
+        for c in self._mock_cameras:
+            if c["id"] == camera_id and c.get("user_id") == user_id:
+                c.update(payload)
+                return c
+        return None
+
     async def delete_camera(self, camera_id: str, user_id: Optional[str] = None) -> bool:
         if self.is_connected:
             try:
@@ -319,6 +341,69 @@ class SupabaseService:
 
         self._mock_incidents.insert(0, incident_data)
         return incident_data
+
+    async def get_incident_by_id(self, incident_id: str) -> Optional[Dict[str, Any]]:
+        if self.is_connected:
+            try:
+                res = self.client.table("incidents").select("*").eq("id", incident_id).execute()
+                if res.data and len(res.data) > 0:
+                    return res.data[0]
+            except Exception as e:
+                logger.error(f"[Supabase] Error get_incident_by_id: {e}")
+
+        for inc in self._mock_incidents:
+            if inc.get("id") == incident_id:
+                return inc
+        return None
+
+    async def update_incident_status(self, incident_id: str, status_val: str) -> Optional[Dict[str, Any]]:
+        if self.is_connected:
+            try:
+                res = (
+                    self.client.table("incidents")
+                    .update({"status": status_val})
+                    .eq("id", incident_id)
+                    .execute()
+                )
+                return res.data[0] if res.data else None
+            except Exception as e:
+                logger.error(f"[Supabase] Error update_incident_status: {e}")
+                return None
+
+        for inc in self._mock_incidents:
+            if inc.get("id") == incident_id:
+                inc["status"] = status_val
+                return inc
+        return None
+
+    async def delete_incident(self, incident_id: str) -> bool:
+        if self.is_connected:
+            try:
+                self.client.table("incidents").delete().eq("id", incident_id).execute()
+                return True
+            except Exception as e:
+                logger.error(f"[Supabase] Error delete_incident: {e}")
+                return False
+
+        initial_len = len(self._mock_incidents)
+        self._mock_incidents = [inc for inc in self._mock_incidents if inc.get("id") != incident_id]
+        return len(self._mock_incidents) < initial_len
+
+    async def delete_incidents_by_camera_ids(self, camera_ids: List[str]) -> int:
+        if not camera_ids:
+            return 0
+
+        if self.is_connected:
+            try:
+                res = self.client.table("incidents").delete().in_("camera_id", camera_ids).execute()
+                return len(res.data) if res.data else 0
+            except Exception as e:
+                logger.error(f"[Supabase] Error delete_incidents_by_camera_ids: {e}")
+                return 0
+
+        before = len(self._mock_incidents)
+        self._mock_incidents = [inc for inc in self._mock_incidents if inc.get("camera_id") not in camera_ids]
+        return before - len(self._mock_incidents)
 
     # ==========================
     # SETTINGS OPERATIONS
