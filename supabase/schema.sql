@@ -66,23 +66,37 @@ CREATE TABLE IF NOT EXISTS public.user_settings (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- 5B. TABEL SUBSCRIPTION WEB PUSH PWA (PUSH_SUBSCRIPTIONS)
+CREATE TABLE IF NOT EXISTS public.push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    endpoint TEXT UNIQUE NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- 6. ROW LEVEL SECURITY (RLS) & POLICIES
 -- Mengaktifkan RLS agar aman dan menghilangkan peringatan di Supabase
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cameras ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 
 -- Policy: Mengizinkan akses untuk backend (Service Role & API Client)
 CREATE POLICY "Allow full access for backend" ON public.users FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow full access for backend" ON public.cameras FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow full access for backend" ON public.incidents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow full access for backend" ON public.user_settings FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow full access for backend" ON public.push_subscriptions FOR ALL USING (true) WITH CHECK (true);
 
 -- 7. INDEXES UNTUK PERFORMA QUERY
 CREATE INDEX IF NOT EXISTS idx_cameras_user_id ON public.cameras(user_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_detected_at ON public.incidents(detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incidents_camera_id ON public.incidents(camera_id);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON public.push_subscriptions(user_id);
 
 -- ====================================================================
 -- SEED DATA AWAL (SESUAI DENGAN DOKUMENTASI & DESAIN FRONTEND RUMI)

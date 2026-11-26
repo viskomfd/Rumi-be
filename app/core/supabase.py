@@ -122,6 +122,7 @@ class SupabaseService:
             "push_notification": True,
             "daily_digest": False
         }
+        self._mock_push_subscriptions: List[Dict[str, Any]] = []
 
     # ==========================
     # USER OPERATIONS
@@ -414,5 +415,96 @@ class SupabaseService:
     async def update_settings(self, settings_data: Dict[str, Any]) -> Dict[str, Any]:
         self._mock_settings.update(settings_data)
         return self._mock_settings
+
+    # ==========================
+    # WEB PUSH SUBSCRIPTION OPERATIONS
+    # ==========================
+    async def save_push_subscription(
+        self,
+        user_id: str,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "user_id": user_id,
+            "endpoint": endpoint,
+            "p256dh": p256dh,
+            "auth": auth,
+            "user_agent": user_agent or "",
+        }
+        if self.is_connected:
+            try:
+                existing = (
+                    self.client.table("push_subscriptions")
+                    .select("*")
+                    .eq("endpoint", endpoint)
+                    .execute()
+                )
+                if existing.data:
+                    res = (
+                        self.client.table("push_subscriptions")
+                        .update(payload)
+                        .eq("endpoint", endpoint)
+                        .execute()
+                    )
+                    if res.data:
+                        return res.data[0]
+                else:
+                    payload["id"] = str(uuid.uuid4())
+                    payload["created_at"] = datetime.now(timezone.utc).isoformat()
+                    res = self.client.table("push_subscriptions").insert(payload).execute()
+                    if res.data:
+                        return res.data[0]
+            except Exception as e:
+                logger.error(f"[Supabase] Error save_push_subscription: {e}")
+
+        for sub in self._mock_push_subscriptions:
+            if sub.get("endpoint") == endpoint:
+                sub.update(payload)
+                return sub
+
+        payload["id"] = payload.get("id") or str(uuid.uuid4())
+        payload["created_at"] = datetime.now(timezone.utc).isoformat()
+        self._mock_push_subscriptions.append(payload)
+        return payload
+
+    async def delete_push_subscription(self, endpoint: str, user_id: Optional[str] = None) -> bool:
+        if self.is_connected:
+            try:
+                query = self.client.table("push_subscriptions").delete().eq("endpoint", endpoint)
+                if user_id:
+                    query = query.eq("user_id", user_id)
+                query.execute()
+                return True
+            except Exception as e:
+                logger.error(f"[Supabase] Error delete_push_subscription: {e}")
+
+        before = len(self._mock_push_subscriptions)
+        self._mock_push_subscriptions = [
+            sub
+            for sub in self._mock_push_subscriptions
+            if not (sub.get("endpoint") == endpoint and (not user_id or sub.get("user_id") == user_id))
+        ]
+        return len(self._mock_push_subscriptions) < before
+
+    async def get_push_subscriptions(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not user_id:
+            return []
+        if self.is_connected:
+            try:
+                res = (
+                    self.client.table("push_subscriptions")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .order("created_at", desc=True)
+                    .execute()
+                )
+                return res.data or []
+            except Exception as e:
+                logger.error(f"[Supabase] Error get_push_subscriptions: {e}")
+
+        return [sub for sub in self._mock_push_subscriptions if sub.get("user_id") == user_id]
 
 db = SupabaseService()

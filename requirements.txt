@@ -16,4 +16,5 @@ ultralytics>=8.3.0
 opencv-python>=4.10.0
 requests>=2.31.0
 imageio-ffmpeg>=0.8.0
+pywebpush>=2.0.0
 

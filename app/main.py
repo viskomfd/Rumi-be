@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.api.routes import auth, cameras, incidents, dashboard, model, ws
+from app.api.routes import auth, cameras, incidents, dashboard, model, ws, push
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,6 +37,7 @@ app.include_router(cameras.router, prefix=settings.API_V1_STR)
 app.include_router(incidents.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(model.router, prefix=settings.API_V1_STR)
+app.include_router(push.router, prefix=settings.API_V1_STR)
 app.include_router(ws.router)
 
 # Endpoint langsung untuk menerima alert dari FallDetectionWorker (realtime_fall_detection.py)

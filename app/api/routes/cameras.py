@@ -163,12 +163,32 @@ async def update_camera(
 
 @router.patch("/{camera_id}/status")
 async def update_camera_status(camera_id: str, payload: Dict[str, Any]):
-    """Update status kamera (online / offline) dari worker/supervisor deteksi jatuh."""
+    """Update status kamera (online / offline) dari UI (Aktifkan/Nonaktifkan) atau worker deteksi jatuh."""
     status_str = str(payload.get("status", "online")).lower()
     if status_str not in ("online", "offline"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Status harus 'online' atau 'offline'")
+
+    if status_str == "offline":
+        camera_stream_manager.stop_camera(camera_id)
+
     await db.update_camera_status(camera_id, status_str)
-    return {"status": "ok", "camera_id": camera_id, "camera_status": status_str}
+    camera = await db.get_camera_by_id(camera_id)
+    if camera:
+        cam_url = camera.get("stream_url") or camera.get("url", "")
+        cam_proto = camera.get("protocol") or detect_protocol(cam_url)
+        return {
+            "id": camera["id"],
+            "camera_id": camera["id"],
+            "name": camera.get("name", ""),
+            "location": camera.get("location", ""),
+            "url": cam_url,
+            "protocol": cam_proto,
+            "status": status_str,
+            "camera_status": status_str,
+            "created_at": camera.get("created_at"),
+        }
+
+    return {"id": camera_id, "camera_id": camera_id, "status": status_str, "camera_status": status_str}
 
 @router.delete("/{camera_id}", status_code=status.HTTP_200_OK)
 async def delete_camera(
@@ -192,6 +212,9 @@ async def stream_camera(camera_id: str, request: Request):
     if not camera:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kamera tidak ditemukan")
 
+    if str(camera.get("status", "online")).lower() == "offline":
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Kamera sedang dinonaktifkan")
+
     stream_url = camera.get("stream_url") or camera.get("url")
     if not stream_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL stream kamera kosong")
@@ -208,8 +231,8 @@ async def stream_camera(camera_id: str, request: Request):
     async def frame_generator():
         try:
             while True:
-                # Jika browser menutup tab / navigasi ke route lain, akhiri response
-                if await request.is_disconnected():
+                # Jika browser menutup tab / navigasi ke route lain, atau kamera dinonaktifkan, akhiri response
+                if await request.is_disconnected() or not worker.running:
                     break
 
                 jpeg_bytes = camera_stream_manager.get_latest_jpeg(camera_id)

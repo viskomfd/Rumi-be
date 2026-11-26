@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Internal Worker Token
     INTERNAL_SERVICE_TOKEN: str = "rumi_internal_worker_secret_2026"
 
+    # Web Push (VAPID) Configuration
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_CLAIM_EMAIL: str = "mailto:admin@rumi.app"
+
     # CORS Configuration
     CORS_ORIGINS: Union[str, List[str]] = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 
