@@ -9,6 +9,8 @@ router = APIRouter(prefix="/cameras", tags=["Cameras"])
 
 def detect_protocol(url: str) -> str:
     url_lower = url.lower()
+    if url_lower.startswith("device://"):
+        return "DEVICE"
     if url_lower.startswith("rtsp://"):
         return "RTSP"
     return "HTTP"
@@ -71,7 +73,7 @@ async def add_camera(
         "stream_url": camera_in.url,
         "protocol": protocol,
         "status": "online",
-        "is_active": True
+        "is_active": protocol != "DEVICE"
     }
     created = await db.create_camera(camera_data)
     return CameraResponse(

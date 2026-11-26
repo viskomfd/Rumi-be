@@ -85,8 +85,16 @@ class CameraWorker:
         reconnect_delay = 1.0
 
         while self.running:
-            cap = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            source = int(self.stream_url) if str(self.stream_url).isdigit() else self.stream_url
+            is_webcam = isinstance(source, int)
+            is_video_file = isinstance(source, str) and (
+                os.path.isfile(source)
+                or source.lower().split("?")[0].endswith((".mp4", ".avi", ".mkv", ".mov", ".webm"))
+            )
+
+            cap = cv2.VideoCapture(source) if is_webcam else cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+            if not is_video_file:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
             if not cap.isOpened():
                 self.is_online = False
@@ -99,9 +107,24 @@ class CameraWorker:
             reconnect_delay = 1.0
             consecutive_empty = 0
 
+            frame_interval = 0.0
+            if is_video_file:
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if not fps or fps <= 1 or fps > 120:
+                    fps = 25.0
+                frame_interval = 1.0 / fps
+
             while self.running and cap.isOpened():
+                t_start = time.time() if is_video_file else 0.0
                 success, frame = cap.read()
                 if not success or frame is None or frame.size == 0:
+                    if is_video_file:
+                        # Loop video dari awal secara mulus tanpa putus/reconnect
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        consecutive_empty += 1
+                        if consecutive_empty > 10:
+                            break
+                        continue
                     consecutive_empty += 1
                     time.sleep(0.01)
                     if consecutive_empty > 30:
@@ -114,6 +137,12 @@ class CameraWorker:
                     self.latest_raw_frame = frame
                     self.last_frame_time = time.time()
                 self.new_frame_event.set()
+
+                if is_video_file and frame_interval > 0:
+                    elapsed = time.time() - t_start
+                    sleep_time = frame_interval - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
 
             cap.release()
             self.is_online = False
