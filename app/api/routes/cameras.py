@@ -5,6 +5,7 @@ from app.core.supabase import db
 from app.core.config import settings
 from app.api.deps import get_current_user, get_optional_current_user
 from app.services.camera_stream_manager import camera_stream_manager
+from app.services.device_stream_relay import device_stream_relay
 
 router = APIRouter(prefix="/cameras", tags=["Cameras"])
 
@@ -53,7 +54,7 @@ async def list_cameras(
         cam_proto = c.get("protocol") or detect_protocol(cam_url)
         db_status = str(c.get("status", "online")).lower()
         live_status = (
-            db_status
+            device_stream_relay.get_live_status(c["id"], db_status)
             if cam_proto == "DEVICE"
             else camera_stream_manager.get_live_status(c["id"], db_status)
         )
@@ -170,6 +171,7 @@ async def update_camera_status(camera_id: str, payload: Dict[str, Any]):
 
     if status_str == "offline":
         camera_stream_manager.stop_camera(camera_id)
+        await device_stream_relay.stop_camera(camera_id)
 
     await db.update_camera_status(camera_id, status_str)
     camera = await db.get_camera_by_id(camera_id)
@@ -196,6 +198,7 @@ async def delete_camera(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     camera_stream_manager.stop_camera(camera_id)
+    await device_stream_relay.stop_camera(camera_id)
     success = await db.delete_camera(camera_id, user_id=current_user["id"])
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kamera tidak ditemukan atau bukan milik Anda")
@@ -218,6 +221,31 @@ async def stream_camera(camera_id: str, request: Request):
     stream_url = camera.get("stream_url") or camera.get("url")
     if not stream_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="URL stream kamera kosong")
+
+    cam_proto = (camera.get("protocol") or detect_protocol(stream_url)).upper()
+    if cam_proto == "DEVICE":
+        if not device_stream_relay.is_online(camera_id):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Kamera perangkat sedang offline atau belum menyiarkan.",
+            )
+
+        async def device_frame_generator():
+            while True:
+                if await request.is_disconnected() or not device_stream_relay.is_online(camera_id):
+                    break
+                jpeg_bytes = device_stream_relay.get_latest_jpeg(camera_id)
+                if jpeg_bytes:
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
+                    )
+                await asyncio.sleep(0.065)  # ~15 FPS
+
+        return StreamingResponse(
+            device_frame_generator(),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+        )
 
     worker = camera_stream_manager.get_or_create_worker(
         camera_id=camera_id,

@@ -5,6 +5,7 @@ from app.schemas.dashboard import DashboardStats, WeeklyActivityItem
 from app.core.supabase import db
 from app.api.deps import get_current_user
 from app.services.camera_stream_manager import camera_stream_manager
+from app.services.device_stream_relay import device_stream_relay
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -68,7 +69,7 @@ async def get_dashboard_summary(current_user: Dict[str, Any] = Depends(get_curre
         cam_proto = (c.get("protocol") or "").upper()
         db_status = str(c.get("status", "online")).lower()
         live_status = (
-            db_status
+            device_stream_relay.get_live_status(c["id"], db_status)
             if cam_proto == "DEVICE"
             else camera_stream_manager.get_live_status(c["id"], db_status)
         )

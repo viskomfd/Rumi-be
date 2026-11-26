@@ -305,7 +305,9 @@ async def upload_incident_clip(
     else:
         stem = f"fall_{incident_id[:8]}"
 
-    ext = ".mp4" if (clip.content_type or "").lower().endswith("mp4") else ".webm"
+    fname_lower = (clip.filename or "").lower()
+    ctype_lower = (clip.content_type or "").lower()
+    ext = ".mp4" if (fname_lower.endswith(".mp4") or "mp4" in ctype_lower) else ".webm"
     os.makedirs(UPLOADS_DIR, exist_ok=True)
     clip_bytes = await clip.read()
     clip_path = os.path.join(UPLOADS_DIR, f"{stem}{ext}")
